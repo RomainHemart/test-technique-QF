@@ -245,20 +245,53 @@ func buildEmailMap(cd []CustomerDataRow) map[int64]string {
 // Compute CA per customer given events and price map
 func computeCA(events []EventRow, priceMap map[int]float64) map[int64]float64 {
 	ca := make(map[int64]float64)
+	missingPrices := make(map[int]int) // ContentID -> count of events with missing price
+
 	// progress bar
 	bar := progressbar.Default(int64(len(events)), "computing CA")
 	for _, e := range events {
-		bar.Add(1)
+		// AMÉLIORATION #2: Gestion des erreurs de progress bar
+		if err := bar.Add(1); err != nil {
+			log.Warnf("progress bar error: %v", err)
+		}
+
 		price, ok := priceMap[e.ContentID]
 		if !ok {
-			// missing price -> warn and skip (or treat as 0)
-			if log.IsLevelEnabled(log.WarnLevel) {
-				log.WithFields(log.Fields{"content_id": e.ContentID, "eventdataid": e.EventDataID}).Warn("missing price for content; skipping")
+			// missing price -> track and skip
+			missingPrices[e.ContentID]++
+			if log.IsLevelEnabled(log.DebugLevel) {
+				log.WithFields(log.Fields{
+					"content_id":  e.ContentID,
+					"eventdataid": e.EventDataID,
+				}).Debug("missing price for content; skipping")
 			}
 			continue
 		}
 		ca[e.CustomerID] += price * float64(e.Quantity)
 	}
+
+	if len(missingPrices) > 0 {
+		totalSkipped := 0
+		for _, count := range missingPrices {
+			totalSkipped += count
+		}
+		log.WithFields(log.Fields{
+			"unique_content_ids":   len(missingPrices),
+			"total_events_skipped": totalSkipped,
+			"percentage_skipped":   fmt.Sprintf("%.2f%%", float64(totalSkipped)/float64(len(events))*100),
+		}).Warn("missing prices detected")
+
+		// Log détail si verbose
+		if log.IsLevelEnabled(log.DebugLevel) {
+			log.Debug("missing price details:")
+			for contentID, count := range missingPrices {
+				log.Debugf("  ContentID %d: %d events skipped", contentID, count)
+			}
+		}
+	} else {
+		log.Info("all events had corresponding prices")
+	}
+
 	return ca
 }
 
@@ -400,7 +433,11 @@ func exportTopCustomers(db *sql.DB, tableName string, top []CustomerCA) error {
 		if err := tx.Commit(); err != nil {
 			return err
 		}
-		bar.Add(len(sub))
+
+		// AMÉLIORATION #2: Gestion des erreurs de progress bar
+		if err := bar.Add(len(sub)); err != nil {
+			log.Warnf("progress bar error: %v", err)
+		}
 	}
 	return nil
 }
@@ -455,12 +492,23 @@ func main() {
 	if qStats == nil {
 		log.Warn("no quantile stats (no customers)")
 	} else {
-		// log summary (first few quantiles)
-		// note: quantile 0 is top (highest CA)
-		for i := 0; i < 3 && i < len(qStats); i++ {
+		// AMÉLIORATION #7: Log de TOUS les quantiles avec range en %
+		log.Info("========== QUANTILE ANALYSIS ==========")
+		for i := 0; i < len(qStats); i++ {
 			s := qStats[i]
-			log.WithFields(log.Fields{"quantile_index": i, "nb_clients": s.NbClients, "min_ca": s.MinCA, "max_ca": s.MaxCA}).Info("quantile summary")
+			startPct := float64(i) * quantile * 100
+			endPct := float64(i+1) * quantile * 100
+
+			log.WithFields(log.Fields{
+				"quantile_index": i,
+				"quantile_range": fmt.Sprintf("%.1f%% - %.1f%%", startPct, endPct),
+				"nb_clients":     s.NbClients,
+				"min_ca":         fmt.Sprintf("%.2f", s.MinCA),
+				"max_ca":         fmt.Sprintf("%.2f", s.MaxCA),
+				"avg_ca":         fmt.Sprintf("%.2f", (s.MinCA+s.MaxCA)/2),
+			}).Info("quantile summary")
 		}
+		log.Info("=======================================")
 		log.WithField("top_quantile_size", len(top)).Info("top quantile extracted")
 	}
 
