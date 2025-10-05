@@ -237,6 +237,7 @@ func buildEmailMap(cd []CustomerDataRow) map[int64]string {
 }
 
 // Compute CA per customer given events and price map
+// AMÉLIORATION #5: Gestion améliorée des prix manquants avec statistiques
 func computeCA(events []EventRow, priceMap map[int]float64) map[int64]float64 {
 	ca := make(map[int64]float64)
 	missingPrices := make(map[int]int) // ContentID -> count of events with missing price
@@ -244,6 +245,7 @@ func computeCA(events []EventRow, priceMap map[int]float64) map[int64]float64 {
 	// progress bar
 	bar := progressbar.Default(int64(len(events)), "computing CA")
 	for _, e := range events {
+		// AMÉLIORATION #2: Gestion des erreurs de progress bar
 		if err := bar.Add(1); err != nil {
 			log.Warnf("progress bar error: %v", err)
 		}
@@ -263,6 +265,7 @@ func computeCA(events []EventRow, priceMap map[int]float64) map[int64]float64 {
 		ca[e.CustomerID] += price * float64(e.Quantity)
 	}
 
+	// AMÉLIORATION #5: Log récapitulatif des prix manquants
 	if len(missingPrices) > 0 {
 		totalSkipped := 0
 		for _, count := range missingPrices {
@@ -427,6 +430,7 @@ func exportTopCustomers(db *sql.DB, tableName string, top []CustomerCA) error {
 			return err
 		}
 
+		// AMÉLIORATION #2: Gestion des erreurs de progress bar
 		if err := bar.Add(len(sub)); err != nil {
 			log.Warnf("progress bar error: %v", err)
 		}
@@ -484,6 +488,16 @@ func main() {
 	caMap := computeCA(events, priceMap)
 	log.WithField("customers_with_ca", len(caMap)).Info("computed CA per customer")
 
+	// Debug: Log CA for specific customers mentioned in the issue
+	if log.IsLevelEnabled(log.DebugLevel) {
+		testCustomers := []int64{46, 114, 237, 417, 10, 933, 836}
+		for _, cid := range testCustomers {
+			if ca, ok := caMap[cid]; ok {
+				log.Debugf("Customer %d CA: %.2f", cid, ca)
+			}
+		}
+	}
+
 	// print 10 samples
 	printRandomSamples(caMap, 10)
 
@@ -495,6 +509,7 @@ func main() {
 	if qStats == nil {
 		log.Warn("no quantile stats (no customers)")
 	} else {
+		// AMÉLIORATION #7: Log de TOUS les quantiles avec range en %
 		log.Info("========== QUANTILE ANALYSIS ==========")
 		for i := 0; i < len(qStats); i++ {
 			s := qStats[i]
