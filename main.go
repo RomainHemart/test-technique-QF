@@ -70,27 +70,21 @@ type QuantileStats struct {
 // -------------------- Globals / config --------------------
 
 var (
-	quantile float64
-	sinceStr string
-	verbose  bool
-
-	// batch size for insert
+	quantile  = 0.025
+	sinceStr  = "2020-04-01"
+	verbose   = false
 	batchSize = 500
 )
 
 // -------------------- Utility / logging --------------------
 
 func init() {
-	flag.Float64Var(&quantile, "quantile", 0.025, "quantile fraction (ex: 0.025)")
-	flag.StringVar(&sinceStr, "since", "2020-04-01", "EventDate lower bound (YYYY-MM-DD)")
-	flag.BoolVar(&verbose, "v", false, "verbose logging")
-	flag.Parse()
-
 	// logger setup
 	log.SetFormatter(&log.TextFormatter{
 		FullTimestamp:   true,
 		TimestampFormat: time.RFC3339,
 	})
+	log.SetOutput(os.Stderr)
 	if verbose || strings.ToLower(os.Getenv("VERBOSE")) == "true" {
 		log.SetLevel(log.DebugLevel)
 	} else {
@@ -250,7 +244,6 @@ func computeCA(events []EventRow, priceMap map[int]float64) map[int64]float64 {
 	// progress bar
 	bar := progressbar.Default(int64(len(events)), "computing CA")
 	for _, e := range events {
-		// AMÉLIORATION #2: Gestion des erreurs de progress bar
 		if err := bar.Add(1); err != nil {
 			log.Warnf("progress bar error: %v", err)
 		}
@@ -434,7 +427,6 @@ func exportTopCustomers(db *sql.DB, tableName string, top []CustomerCA) error {
 			return err
 		}
 
-		// AMÉLIORATION #2: Gestion des erreurs de progress bar
 		if err := bar.Add(len(sub)); err != nil {
 			log.Warnf("progress bar error: %v", err)
 		}
@@ -445,6 +437,17 @@ func exportTopCustomers(db *sql.DB, tableName string, top []CustomerCA) error {
 // -------------------- Main --------------------
 
 func main() {
+	// Define and parse flags in main() to avoid conflicts with test flags
+	flag.Float64Var(&quantile, "quantile", 0.025, "quantile fraction (ex: 0.025)")
+	flag.StringVar(&sinceStr, "since", "2020-04-01", "EventDate lower bound (YYYY-MM-DD)")
+	flag.BoolVar(&verbose, "verbose", false, "verbose logging")
+	flag.Parse()
+
+	// Update log level after parsing flags
+	if verbose || strings.ToLower(os.Getenv("VERBOSE")) == "true" {
+		log.SetLevel(log.DebugLevel)
+	}
+
 	start := time.Now()
 	log.WithField("stage", "START").Infof("starting process. quantile=%v since=%s", quantile, sinceStr)
 
@@ -492,7 +495,6 @@ func main() {
 	if qStats == nil {
 		log.Warn("no quantile stats (no customers)")
 	} else {
-		// AMÉLIORATION #7: Log de TOUS les quantiles avec range en %
 		log.Info("========== QUANTILE ANALYSIS ==========")
 		for i := 0; i < len(qStats); i++ {
 			s := qStats[i]
